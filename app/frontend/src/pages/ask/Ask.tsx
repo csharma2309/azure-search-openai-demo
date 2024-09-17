@@ -263,7 +263,7 @@ export function Component(): JSX.Element {
                 </div>
             </div>
             <div className={styles.askBottomSection}>
-                {isLoading && <Spinner label={t("generatingAnswer")} />}
+                {isLoading && <Spinner label="Pondering deeply about your question" />}
                 {!lastQuestionRef.current && (
                     <div className={styles.askTopSection}>
                         {showLanguagePicker && <LanguagePicker onLanguageChange={newLang => i18n.changeLanguage(newLang)} />}

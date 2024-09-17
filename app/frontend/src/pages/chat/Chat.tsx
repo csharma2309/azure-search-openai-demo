@@ -154,7 +154,7 @@ const Chat = () => {
     const client = useLogin ? useMsal().instance : undefined;
     const { loggedIn } = useContext(LoginContext);
 
-    const makeApiRequest = async (question: string) => {
+    const makeApiRequest = async (question: string, image?: string) => {
         lastQuestionRef.current = question;
 
         error && setError(undefined);
@@ -194,9 +194,10 @@ const Chat = () => {
                     }
                 },
                 // AI Chat Protocol: Client must pass on any session state received from the server
-                session_state: answers.length ? answers[answers.length - 1][1].session_state : null
+                session_state: answers.length ? answers[answers.length - 1][1].session_state : null,
+                image: image
             };
-
+            console.log(request);
             const response = await chatApi(request, shouldStream, token);
             if (!response.body) {
                 throw Error("No response body");
@@ -362,10 +363,9 @@ const Chat = () => {
                     {!lastQuestionRef.current ? (
                         <div className={styles.chatEmptyState}>
                             <SparkleFilled fontSize={"120px"} primaryFill={"rgba(115, 118, 225, 1)"} aria-hidden="true" aria-label="Chat logo" />
-                            <h1 className={styles.chatEmptyStateTitle}>{t("chatEmptyStateTitle")}</h1>
-                            <h2 className={styles.chatEmptyStateSubtitle}>{t("chatEmptyStateSubtitle")}</h2>
+                            <h1 className={styles.chatEmptyStateTitle}>Consult Your Agronomic Advisor</h1>
+                            <h2 className={styles.chatEmptyStateSubtitle}>Upload a plant image or ask about crop management</h2>
                             {showLanguagePicker && <LanguagePicker onLanguageChange={newLang => i18n.changeLanguage(newLang)} />}
-
                             <ExampleList onExampleClicked={onExampleClicked} useGPT4V={useGPT4V} />
                         </div>
                     ) : (
@@ -439,9 +439,9 @@ const Chat = () => {
                     <div className={styles.chatInput}>
                         <QuestionInput
                             clearOnSend
-                            placeholder={t("defaultExamples.placeholder")}
+                            placeholder="Ask a new question (e.g. What are the benefits of using zinc seed treatments for corn cultivation?)"
                             disabled={isLoading}
-                            onSend={question => makeApiRequest(question)}
+                            onSend={(question, image) => makeApiRequest(question, image)}
                             showSpeechInput={showSpeechInput}
                         />
                     </div>
