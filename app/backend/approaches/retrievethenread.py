@@ -22,7 +22,6 @@ class RetrieveThenReadApproach(Approach):
         + "agriculture products like herbicies, fungicides, pesticides etc questions from a product book. "
         + "Use 'you' to refer to the individual asking the questions even if they ask with 'I'. "
         + "Answer the following question using only the data provided in the sources below. "
-        + "For tabular information return it as an html table. Do not return markdown format. "
         + "Each source has a name followed by colon and the actual information, always include the source name for each fact you use in the response. "
         + "If you cannot answer using the sources below, say you don't know. Use below example to answer"
     )
@@ -157,7 +156,7 @@ info4.pdf: In-network institutions include Overlake, Swedish and others in the r
                 ),
                 ThoughtStep(
                     "Prompt to generate answer",
-                    [str(message) for message in updated_messages],
+                    updated_messages,
                     (
                         {"model": self.chatgpt_model, "deployment": self.chatgpt_deployment}
                         if self.chatgpt_deployment

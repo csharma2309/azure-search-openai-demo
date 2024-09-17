@@ -17,7 +17,11 @@ from azure.cognitiveservices.speech import (
     SpeechSynthesizer,
 )
 from azure.core.exceptions import ResourceNotFoundError
-from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity.aio import (
+    AzureDeveloperCliCredential,
+    ManagedIdentityCredential,
+    get_bearer_token_provider,
+)
 from azure.monitor.opentelemetry import configure_azure_monitor
 from azure.search.documents.aio import SearchClient
 from azure.search.documents.indexes.aio import SearchIndexClient
@@ -62,6 +66,7 @@ from config import (
     CONFIG_CREDENTIAL,
     CONFIG_GPT4V_DEPLOYED,
     CONFIG_INGESTER,
+    CONFIG_LANGUAGE_PICKER_ENABLED,
     CONFIG_OPENAI_CLIENT,
     CONFIG_SEARCH_CLIENT,
     CONFIG_SEMANTIC_RANKER_DEPLOYED,
@@ -276,6 +281,7 @@ def config():
             "showSemanticRankerOption": current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED],
             "showVectorOption": current_app.config[CONFIG_VECTOR_SEARCH_ENABLED],
             "showUserUpload": current_app.config[CONFIG_USER_UPLOAD_ENABLED],
+            "showLanguagePicker": current_app.config[CONFIG_LANGUAGE_PICKER_ENABLED],
             "showSpeechInput": current_app.config[CONFIG_SPEECH_INPUT_ENABLED],
             "showSpeechOutputBrowser": current_app.config[CONFIG_SPEECH_OUTPUT_BROWSER_ENABLED],
             "showSpeechOutputAzure": current_app.config[CONFIG_SPEECH_OUTPUT_AZURE_ENABLED],
@@ -482,15 +488,26 @@ async def setup_clients():
 
     USE_GPT4V = os.getenv("USE_GPT4V", "").lower() == "true"
     USE_USER_UPLOAD = os.getenv("USE_USER_UPLOAD", "").lower() == "true"
+    ENABLE_LANGUAGE_PICKER = os.getenv("ENABLE_LANGUAGE_PICKER", "").lower() == "true"
     USE_SPEECH_INPUT_BROWSER = os.getenv("USE_SPEECH_INPUT_BROWSER", "").lower() == "true"
     USE_SPEECH_OUTPUT_BROWSER = os.getenv("USE_SPEECH_OUTPUT_BROWSER", "").lower() == "true"
     USE_SPEECH_OUTPUT_AZURE = os.getenv("USE_SPEECH_OUTPUT_AZURE", "").lower() == "true"
 
-    # Use the current user identity to authenticate with Azure OpenAI, AI Search and Blob Storage (no secrets needed,
-    # just use 'az login' locally, and managed identity when deployed on Azure). If you need to use keys, use separate AzureKeyCredential instances with the
-    # keys for each service
-    # If you encounter a blocking error during a DefaultAzureCredential resolution, you can exclude the problematic credential by using a parameter (ex. exclude_shared_token_cache_credential=True)
-    azure_credential = DefaultAzureCredential(exclude_shared_token_cache_credential=True)
+    # Use the current user identity for keyless authentication to Azure services.
+    # This assumes you use 'azd auth login' locally, and managed identity when deployed on Azure.
+    # The managed identity is setup in the infra/ folder.
+    azure_credential: Union[AzureDeveloperCliCredential, ManagedIdentityCredential]
+    if os.getenv("WEBSITE_HOSTNAME"):  # Environment variable set on Azure Web Apps
+        current_app.logger.info("Setting up Azure credential using ManagedIdentityCredential")
+        azure_credential = ManagedIdentityCredential()
+    elif AZURE_TENANT_ID:
+        current_app.logger.info(
+            "Setting up Azure credential using AzureDeveloperCliCredential with tenant_id %s", AZURE_TENANT_ID
+        )
+        azure_credential = AzureDeveloperCliCredential(tenant_id=AZURE_TENANT_ID, process_timeout=60)
+    else:
+        current_app.logger.info("Setting up Azure credential using AzureDeveloperCliCredential for home tenant")
+        azure_credential = AzureDeveloperCliCredential(process_timeout=60)
 
     # Set up clients for AI Search and Storage
     search_client = SearchClient(
@@ -632,6 +649,7 @@ async def setup_clients():
     current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED] = AZURE_SEARCH_SEMANTIC_RANKER != "disabled"
     current_app.config[CONFIG_VECTOR_SEARCH_ENABLED] = os.getenv("USE_VECTORS", "").lower() != "false"
     current_app.config[CONFIG_USER_UPLOAD_ENABLED] = bool(USE_USER_UPLOAD)
+    current_app.config[CONFIG_LANGUAGE_PICKER_ENABLED] = ENABLE_LANGUAGE_PICKER
     current_app.config[CONFIG_SPEECH_INPUT_ENABLED] = USE_SPEECH_INPUT_BROWSER
     current_app.config[CONFIG_SPEECH_OUTPUT_BROWSER_ENABLED] = USE_SPEECH_OUTPUT_BROWSER
     current_app.config[CONFIG_SPEECH_OUTPUT_AZURE_ENABLED] = USE_SPEECH_OUTPUT_AZURE
