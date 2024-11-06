@@ -1,11 +1,9 @@
-import json
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Union
 
-import requests
 
 from azure.search.documents.aio import SearchClient
 from azure.storage.blob.aio import ContainerClient
-from openai import AsyncOpenAI, AsyncStream, AsyncAzureOpenAI
+from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionChunk,
@@ -70,10 +68,23 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
     @property
     def system_message_chat_conversation(self):
         return """
-        Assistant helps the Agronomist who will get queries from growers about various questions that growers would have about their fields,
-        agro-chemicals, pest control, nutrients, fertilizers etc. The job of agronomist is to use this knowledge base of documents and answer based on it., The documents contain text, graphs, tables and images.
-        Each image source has the file name in the top left corner of the image with coordinates (10,10) pixels and is in the format SourceFileName:<file_name>
-        Each text source starts in a new line and has the file name followed by colon and the actual information
+        You are an AI assistant specializing in agricultural issues, particularly crop diseases and farming practices. 
+        Your role is to help agronomists answer queries from growers about various field-related issues, agro-chemicals, pest control, nutrients, fertilizers, etc. 
+        Use the provided knowledge base of documents to answer questions. 
+        The documents contain text, graphs, tables, and images.
+
+        Your response should be structured as follows:
+
+        1. If an image analysis is provided:
+            a. Disease Identification: Briefly describe the identified disease based on the image analysis.
+            b. Provide a concise explanation of the disease, its symptoms, and potential impacts.
+            c. Solution Recommendation: Recommend products or treatments based strictly on the information found in the provided documents.
+
+        2. If no image analysis is provided (text query only):
+            a. Briefly restate the user's question to confirm understanding.
+            b. Provide relevant information from the knowledge base to address the query.
+            c. If applicable, suggest products, treatments, or best practices based strictly on the information found in the provided documents.
+
         Always include the source name from the image or text for each fact you use in the response in the format: [filename]
         Answer the following question using only the data provided in the sources below.
         If asking a clarifying question to the user would help, ask the question.
@@ -81,13 +92,14 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
         For tabular information return it as an html table. Do not return markdown format.
         The text and image source can be the same file name, don't use the image title when citing the image source, only use the file name as mentioned
         If you cannot answer using the sources below, say you don't know. Return just the answer without any input texts.
+
         {follow_up_questions_prompt}
         {injected_prompt}
         """
+
     async def analyze_image(self, image_url: str) -> str:
         import requests
         from io import BytesIO
-        from PIL import Image
         import base64
         # Step 1: Fetch the image from the URL
         response = requests.get(image_url)
@@ -111,23 +123,25 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
         response = await self.openai_client.chat.completions.create(
             model=deployment_name,
             messages=[
-                { "role": "system", "content": "You are an expert agronomist specializing in plant pathology and crop health. Your task is to analyze images of agricultural crops, focusing on corn, soybean, wheat, and other common global crops. Provide precise identifications of plant health issues, diseases, pest damage, nutrient deficiencies, or environmental stress." },
-                { "role": "user", "content": [  
-                    { 
-                        "type": "text", 
-                        "text": "Analyze the provided image and respond with the following information:\n1. Crop Identification: Specify the crop (e.g., corn, soybean, wheat).\n2. Plant Part: Identify the part of the plant shown (e.g., leaf, stem, root, fruit).\n3. Health Status: State whether the plant appears healthy or shows signs of issues.\n4. If issues are present, provide:\n   a) Primary Condition: The most prominent disease, pest, or deficiency.\n   b) Secondary Conditions: Any other noticeable issues.\n   c) Severity: Estimate the severity as mild, moderate, or severe.\n5. Key Visual Indicators: List 2-3 key visual cues that led to your diagnosis.\n\nRespond in a structured format suitable for database querying. If the image is unclear or not plant-related, state 'Image unclear or not plant-related'. If you cannot confidently identify an issue, state 'Unable to determine specific condition'." 
+                {"role": "system", "content": "You are an AI assistant specialized in identifying crop diseases. Provide concise, accurate identifications."},
+                {"role": "user", "content": [
+                    {
+                        "type": "text",
+                        "text": "Analyze this plant image and provide:\n1. Crop name\n2. Disease name\n3. Key symptoms (in one sentence)"
                     },
-                    { 
+                    {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/jpeg;base64," + encoded_image
-                        }
+                        "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}
                     }
-                ] } 
+                ]}
             ],
-            max_tokens=2000 
+            max_tokens=100,
+            temperature=0.3,
+            top_p=0.95,
+            frequency_penalty=0,
+            presence_penalty=0,
+            stop=None
         )
-        # Access the response
         assistant_response = response.choices[0].message.content
         print(assistant_response)
         return assistant_response
@@ -159,16 +173,20 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
             raise ValueError("The most recent message content must be a string.")
         past_messages: list[ChatCompletionMessageParam] = messages[:-1]
 
-        print("Override is ", overrides)
         # STEP 1: Generate an optimized keyword search query based on the chat history and the last question
-        #user_query_request = "Generate search query for: " + original_user_query
-        #image_analysis = await self.analyze_image("https://stv3od7n6qiv4m2.blob.core.windows.net/content/corn-BLS-irregular-lesions.jpg?sp=r&st=2024-09-10T14:45:19Z&se=2024-09-10T22:45:19Z&skoid=44d37ec7-fae7-4a3b-9f41-b8f3539805da&sktid=c6c1e9da-5d0c-4f8f-9a02-3c67206efbd6&skt=2024-09-10T14:45:19Z&ske=2024-09-10T22:45:19Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=wn6yZRtzLkEPun65ed7BPxzU3bhkBOY9KJ5j%2F0B8aEE%3D")
         image_received = overrides.get("image_url", "")
-        print("Image received in vision method is ", image_received)
-        image_analysis = await self.analyze_image(image_received)
-        #image_analysis = await self.analyze_image("https://stv3od7n6qiv4m2.blob.core.windows.net/content/beacterial-leaf-streak.jfif?sp=r&st=2024-09-10T17:27:30Z&se=2024-09-11T01:27:30Z&skoid=44d37ec7-fae7-4a3b-9f41-b8f3539805da&sktid=c6c1e9da-5d0c-4f8f-9a02-3c67206efbd6&skt=2024-09-10T17:27:30Z&ske=2024-09-11T01:27:30Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=7LG3gwgQ9vmu3pVt8Vb1Exh1EGVMkAR3QC%2Fc2BLH8Co%3D")
-        user_query_request = f"Generate search query for: {image_analysis}"
-        print(user_query_request)
+        image_analysis = ""
+        print("Image received is ", image_received)
+        if image_received:
+            image_analysis = await self.analyze_image(image_received)
+            #product_recommendations = await self.get_product_recommendations(image_analysis)
+            #print("Product recommendations based on this are ", product_recommendations)
+
+        # Generate search query based on image analysis
+        if image_analysis:
+            user_query_request = f"Generate a search query for the following plant disease analysis: {image_analysis}"
+        else:
+            user_query_request = original_user_query
 
         query_response_token_limit = 100
         query_model = self.chatgpt_model
@@ -185,7 +203,7 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
         chat_completion: ChatCompletion = await self.openai_client.chat.completions.create(
             model=query_deployment if query_deployment else query_model,
             messages=query_messages,
-            temperature=0.0,  # Minimize creativity for search query generation
+            temperature=0.0,
             max_tokens=query_response_token_limit,
             n=1,
             seed=seed,
@@ -229,6 +247,10 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
             self.follow_up_questions_prompt_content if overrides.get("suggest_followup_questions") else "",
         )
 
+        if image_analysis:
+            user_content: list[ChatCompletionContentPartParam] = [
+                {"text": f"Image Analysis:\n{image_analysis}\n\nUser Query: {original_user_query}", "type": "text"}
+            ]
         user_content: list[ChatCompletionContentPartParam] = [{"text": image_analysis, "type": "text"}]
         image_list: list[ChatCompletionContentPartImageParam] = []
 
@@ -307,3 +329,35 @@ class ChatReadRetrieveReadVisionApproach(ChatApproach):
             seed=seed,
         )
         return (extra_info, chat_coroutine)
+    
+    async def get_product_recommendations(self, disease_info: str) -> str:
+        # Use the disease_info to perform a targeted search in your document database
+        search_results = await self.search(
+            top=3,  # Adjust as needed
+            query_text=disease_info,
+            filter=None,  # Adjust if you need to filter by document type
+            vectors=[],
+            use_text_search=True,
+            use_vector_search=False,  # Adjust based on your setup
+            use_semantic_ranker=True,
+            use_semantic_captions=False,
+            minimum_search_score=0.5,
+            minimum_reranker_score=0.0
+        )
+
+        # Extract relevant information from search results
+        product_info = self.get_sources_content(search_results, use_semantic_captions=False, use_image_citation=True)
+
+        # Use GPT to synthesize the product recommendations
+        deployment_name = self.chatgpt_deployment
+        response = await self.openai_client.chat.completions.create(
+            model=deployment_name,
+            messages=[
+                {"role": "system", "content": "You are an AgTech product specialist. Provide concise, specific product recommendations based on the given information using only given data source. Don't use any extrenal data sources on web."},
+                {"role": "user", "content": f"Based on the disease: {disease_info}, provide product recommendations using this information:\n\n{' '.join(product_info)}"}
+            ],
+            max_tokens=300,
+            temperature=0.5,
+        )
+        
+        return response.choices[0].message.content
